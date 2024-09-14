@@ -8,13 +8,13 @@
 // the JSX is converted to valid Js by build tools like Babel
 // the conversion is done by calling React.CreateElement
 
-// const element = React.CreateElement = ({
+// const element = React.CreateElement = (
 //     "h1",
 //      {
 //     title: "foo"
 //      },
 //     "HELLO"
-//   })
+//   )
 
 // which is converted to valid js like
 
@@ -26,7 +26,7 @@
 //   },
 // };
 
-export function createElement(type, props, ...children) {
+export default function createElement(type, props, ...children) {
   return {
     type: type,
     props: {
@@ -63,6 +63,7 @@ function createTextElement(text) {
 //   createElement("li", null, "Carrot")
 // );
 
+// /** @jsxRuntime classic */ // if babel is latest switch to older method
 // /** @jsx XReact.createElement */ with this comment Babel will take jsx and convert to valid js using own XReact
 // const element = (
 //     <ul id="foo">

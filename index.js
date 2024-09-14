@@ -1,7 +1,9 @@
-import { CreateElement } from "./createElement";
+import createElement from "./createElement";
+import render from "./render";
 
 const XReact = {
-  CreateElement,
+  createElement,
+  render,
 };
 
 export default XReact;
