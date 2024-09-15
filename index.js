@@ -117,6 +117,8 @@ const createDOM = (fiber) => {
 
 let nextUnitOfWork = null;
 let wipRoot = null; // work in progress root (root of fibre tree)
+let currentRoot = null; // the fiber tree that is previously commited to DOM (needed to update and delete nodes on dom mutation)
+let deletions = null; // to keep track of nodes that needs to be deleted
 
 function workLoop(deadline) {
   let shouldYield = false;
@@ -137,44 +139,68 @@ function workLoop(deadline) {
 requestIdleCallback(workLoop);
 
 // FIBER :
-// it is a data structure that uses linked list data structure that have a ref to parent, child, sibling fibre
+// it is a data structure that have a ref to parent, child, sibling fibre
 // the goal of fibre DS is to make it easy to find next unit of work
-function performUnitOfWork(fiber) {
-  // 1. add element to the dom (Problem: but if any high priority task get executed by interrupting the render the user will see incomplete UI)
-  // 2. add fiber to all its children
-  // 3. set nextunitofwork by returing it
+// function performUnitOfWork(fiber) {
+//   // 1. add element to the dom (Problem: but if any high priority task get executed by interrupting the render the user will see incomplete UI)
+//   // 2. add fiber to all its children
+//   // 3. set nextunitofwork by returing it
 
+//   // 1
+//   if (!fiber.dom) {
+//     fiber.dom = createDOM(fiber);
+//   }
+//   // if (fiber.parent) { // to avoid the Problem
+//   //   fiber.parent.dom.appendChild(fiber.dom);
+//   // }
+
+//   // 2
+//   const elements = fiber.props.children;
+//   let index = 0;
+//   let previousSibling = null;
+
+//   while (index < elements.length) {
+//     const element = elements[index];
+//     const newFiber = {
+//       dom: null,
+//       props: element.props,
+//       type: element.type,
+//       parent: fiber,
+//     }; //create a new fibre and we add it to the fiber tree setting it either as a child or as a sibling, depending on whether it’s the first child or not.
+
+//     if (index == 0) {
+//       fiber.child = newFiber;
+//     } else {
+//       fiber.sibling = newFiber;
+//     }
+
+//     previousSibling = newFiber;
+//     i++;
+//   }
+
+//   // 3 (search for nexunitofwork first try with the child, then with the sibling, then with the uncle, and so on)
+//   if (fiber.child) {
+//     return fiber.child;
+//   }
+
+//   let nextFiber = fiber;
+//   while (nextFiber) {
+//     if (nextFiber.sibling) {
+//       return nextFiber.sibling;
+//     }
+//     nextFiber = nextFiber.parent;
+//   }
+// }
+
+// FIBER
+function performUnitOfWork(fiber) {
   // 1
   if (!fiber.dom) {
     fiber.dom = createDOM(fiber);
   }
-  // if (fiber.parent) { // to avoid the Problem
-  //   fiber.parent.dom.appendChild(fiber.dom);
-  // }
 
-  // 2
   const elements = fiber.props.children;
-  let index = 0;
-  let previousSibling = null;
-
-  while (index < elements.length) {
-    const element = elements[index];
-    const newFiber = {
-      dom: null,
-      props: element.props,
-      type: element.type,
-      parent: fiber,
-    }; //create a new fibre and we add it to the fiber tree setting it either as a child or as a sibling, depending on whether it’s the first child or not.
-
-    if (index == 0) {
-      fiber.child = newFiber;
-    } else {
-      fiber.sibling = newFiber;
-    }
-
-    previousSibling = newFiber;
-    i++;
-  }
+  reconcileChildren(fiber, elements);
 
   // 3 (search for nexunitofwork first try with the child, then with the sibling, then with the uncle, and so on)
   if (fiber.child) {
@@ -190,9 +216,123 @@ function performUnitOfWork(fiber) {
   }
 }
 
+function reconcileChildren(wipFiber, elements) {
+  let oldFiber = wipFiber.alternate && wipFiber.alternate.child;
+  let index = 0;
+  let previousSibling = null;
+
+  while (index < elements.length || oldFiber !== null) {
+    const element = elements[index];
+    let newFiber = null;
+
+    const sameType = oldFiber && element && oldFiber.type === element.type;
+
+    if (sameType) {
+      // update the node (if they both are same keep the DOM node and just update it with the props)
+      newFiber = {
+        type: oldFiber.type,
+        dom: oldFiber.dom,
+        props: element.props,
+        parent: wipFiber,
+        alternate: oldFiber,
+        effecTag: "UPDATE", // will be used in commit phase
+      };
+    }
+    if (element && !sameType) {
+      // add this node (type is different && new element means create a new DOM)
+      newFiber = {
+        type: element.type,
+        props: element.props,
+        parent: wipFiber,
+        dom: null,
+        alternate: null,
+        effecTag: "PLACEMENT",
+      };
+    }
+    if (oldFiber && !sameType) {
+      // delete the old fiber node (types are diffferent mean reemove old node)
+      oldFiber.effecTag = "DELETION";
+      deletions.push(oldFiber);
+    }
+    // NOTE: Here React also uses keys, that makes a better reconciliation.
+    // For example, it detects when children change places in the element array.
+  }
+}
+
 // once we finish all the work i.e when there is no nextUnitofWork we commit the whole fiber tree to the DOM
 function commitRoot() {
-  // add nodes to DOM
+  deletions.forEach(commitWork);
+  // recursively append all the nodes to the dom
+  commitWork(wipRoot.child);
+  currentRoot = wipRoot;
+  wipRoot = null;
+}
+
+// this handles only creation
+// function commitWork(fiber) {
+//   if (!fiber) return;
+
+//   fiber.parent.dom.appendChild(fiber.dom);
+//   commitWork(fiber.child);
+//   commitWork(fiber.sibling);
+// }
+
+// update the above code to work with effectTags
+function commitWork(fiber) {
+  if (!fiber) return;
+  const domParent = fiber.parent.dom;
+  if (fiber.effecTag === "PLACEMENT" && fiber.dom !== null) {
+    domParent.appendChild(fiber.dom);
+  } else if (fiber.effecTag === "UPDATE" && fiber.dom !== null) {
+    updateDom(fiber.dom, fiber.alternate.props, fiber.props);
+  } else if (fiber.effecTag === "DELETION") {
+    domParent.removeChild(fiber.dom);
+  }
+  commitWork(fiber.child);
+  commitWork(fiber.sibling);
+}
+
+const isEvent = (key) => key.startsWith("on");
+const isProperty = (key) => key !== "children" && !isEvent(key);
+const isNew = (prev, next) => (key) => prev[key] !== next[key];
+const isGone = (prev, next) => (key) => !(key in next);
+
+// RECONCILIATION
+// compare previousFiber with currentFiber and update the dom
+function updateDom(dom, prevProps, nextProps) {
+  // Remove old  or changed event listeners
+  Object.keys(prevProps)
+    .filter(isEvent)
+    .filter((key) => !(key in nextProps) || isNew(prevProps, nextProps)(key))
+    .forEach((name) => {
+      const eventType = name.toLowerCase().substring(2);
+      dom.removeEventListener(eventType, prevProps[name]);
+    });
+
+  // Add event listeners
+  Object.keys(nextProps)
+    .filter(isEvent)
+    .filter(isNew(prevProps, nextProps))
+    .forEach((name) => {
+      const eventType = name.toLowerCase().substring(2);
+      dom.addEvenListener(eventType, nextProps[name]);
+    });
+
+  // Remove old Properties
+  Object.keys(prevProps)
+    .filter(isProperty)
+    .filter(isGone(prevProps, nextProps))
+    .forEach((name) => {
+      dom[name] = "";
+    });
+
+  // add or update properties
+  Object.keys(nextProps)
+    .filter(isProperty)
+    .filter(isNew(prevProps, nextProps))
+    .forEach((name) => {
+      dom[name] = nextProps[name];
+    });
 }
 
 // In the render function we set nextUnitOfWork to the root of the fiber tree.
@@ -203,7 +343,9 @@ const render = (element, container) => {
     props: {
       children: [element],
     },
+    alternate: currentRoot,
   };
+  deletions = [];
   nextUnitOfWork = wipRoot;
 };
 
